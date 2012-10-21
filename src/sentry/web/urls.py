@@ -128,6 +128,7 @@ urlpatterns = patterns('',
     # API / JS
 
     url(r'^api/store/$', api.store, name='sentry-api-store'),
+    url(r'^api/bulkstore/$', api.bulkstore, name='sentry-api-bulkstore'),
     url(r'^api/notification/$', api.notification, name='sentry-api-notification'),
     url(r'^api/(?P<project_id>[\w_-]+)/store/$', api.store, name='sentry-api-store'),
     url(r'^api/(?P<project_id>[\w_-]+)/poll/$', api.poll, name='sentry-api-poll'),

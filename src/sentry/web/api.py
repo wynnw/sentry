@@ -85,6 +85,64 @@ def api_method(func):
     return wrapped
 
 
+def _check_store_auth(request, project):
+    client = '<unknown client>'
+    auth_vars = extract_auth_vars(request)
+    data = request.raw_post_data
+
+    if auth_vars:
+        server_version = auth_vars.get('sentry_version', '1.0')
+        client = auth_vars.get('sentry_client', request.META.get('HTTP_USER_AGENT'))
+    else:
+        server_version = request.GET.get('version', '1.0')
+        client = request.META.get('HTTP_USER_AGENT', request.GET.get('client'))
+
+    if server_version not in ('1.0', '2.0'):
+        raise APIError('Client/server version mismatch: Unsupported version: %r' % server_version)
+
+    if server_version != '1.0' and not client:
+        raise APIError('Client request error: Missing client version identifier.')
+
+    referrer = request.META.get('HTTP_REFERER')
+
+    if auth_vars:
+        # We only require a signature if a referrer was not set
+        # (this is restricted via the CORS headers)
+        project_ = project_from_auth_vars(auth_vars, data,
+            require_signature=False)
+
+        if not project:
+            project = project_
+        elif project_ != project:
+            raise APIError('Project ID mismatch')
+
+    elif request.user.is_authenticated() and is_same_domain(request.build_absolute_uri(), referrer):
+        # authenticated users are simply trusted to provide the right id
+        project_ = project_from_id(request)
+
+        if not project:
+            project = project_
+        elif project_ != project:
+            raise APIError('Project ID mismatch')
+
+    else:
+        raise APIUnauthorized()
+
+    return project, data, client
+
+
+def _extract_msg(project, data, client):
+    if not data.startswith('{'):
+        data = decode_and_decompress_data(data)
+    data = safely_load_json_string(data)
+
+    try:
+        validate_data(project, data, client)
+    except InvalidData, e:
+        raise APIError(u'Invalid data: %s' % unicode(e))
+    return data
+
+
 @require_http_methods(['POST', 'OPTIONS'])
 @never_cache
 @api_method
@@ -119,62 +177,12 @@ def store(request, project=None):
     """
     logger.debug('Inbound %r request from %r (%s)', request.method, request.META['REMOTE_ADDR'],
         request.META.get('HTTP_USER_AGENT'))
-    client = '<unknown client>'
-
     response = HttpResponse()
 
     if request.method == 'POST':
         try:
-            auth_vars = extract_auth_vars(request)
-            data = request.raw_post_data
-
-            if auth_vars:
-                server_version = auth_vars.get('sentry_version', '1.0')
-                client = auth_vars.get('sentry_client', request.META.get('HTTP_USER_AGENT'))
-            else:
-                server_version = request.GET.get('version', '1.0')
-                client = request.META.get('HTTP_USER_AGENT', request.GET.get('client'))
-
-            if server_version not in ('1.0', '2.0'):
-                raise APIError('Client/server version mismatch: Unsupported version: %r' % server_version)
-
-            if server_version != '1.0' and not client:
-                raise APIError('Client request error: Missing client version identifier.')
-
-            referrer = request.META.get('HTTP_REFERER')
-
-            if auth_vars:
-                # We only require a signature if a referrer was not set
-                # (this is restricted via the CORS headers)
-                project_ = project_from_auth_vars(auth_vars, data,
-                    require_signature=False)
-
-                if not project:
-                    project = project_
-                elif project_ != project:
-                    raise APIError('Project ID mismatch')
-
-            elif request.user.is_authenticated() and is_same_domain(request.build_absolute_uri(), referrer):
-                # authenticated users are simply trusted to provide the right id
-                project_ = project_from_id(request)
-
-                if not project:
-                    project = project_
-                elif project_ != project:
-                    raise APIError('Project ID mismatch')
-
-            else:
-                raise APIUnauthorized()
-
-            if not data.startswith('{'):
-                data = decode_and_decompress_data(data)
-            data = safely_load_json_string(data)
-
-            try:
-                validate_data(project, data, client)
-            except InvalidData, e:
-                raise APIError(u'Invalid data: %s' % unicode(e))
-
+            project, data, client = _check_store_auth(request)
+            data = _extract_msg(project, data, client)
             insert_data_to_database(data)
         except APIError, error:
             logger.error('Client %r raised API error: %s', client, error, extra={
@@ -183,6 +191,37 @@ def store(request, project=None):
             response = HttpResponse(unicode(error.msg), status=error.http_status)
         else:
             logger.info('New event from client %r (id=%s)', client, data['event_id'])
+
+    return response
+
+
+@require_http_methods(['POST', 'OPTIONS'])
+@never_cache
+@api_method
+def bulkstore(request, project=None):
+    """Handles a json array of encoded messages"""
+    logger.debug('Inbound %r request from %r (%s)', request.method, request.META['REMOTE_ADDR'],
+        request.META.get('HTTP_USER_AGENT'))
+    response = HttpResponse()
+
+    if request.method == 'POST':
+        try:
+            project, data, client = _check_store_auth(request, project)
+
+            if not data.startswith('['):
+                raise APIError('Invalid data - must be json array')
+
+            array = safely_load_json_string(data)
+            for msgdata in array:
+                msg = _extract_msg(project, msgdata, client)
+                insert_data_to_database(msg)
+                logger.info('New event from client %r (id=%s)', client, msg['event_id'])
+
+        except APIError, error:
+            logger.error('Client %r raised API error: %s', client, error, extra={
+                'request': request,
+            }, exc_info=True)
+            response = HttpResponse(unicode(error.msg), status=error.http_status)
 
     return response
 
