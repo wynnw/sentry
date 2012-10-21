@@ -235,7 +235,10 @@ def safely_load_json_string(json_string):
             e.__class__.__name__, e))
 
     # XXX: ensure keys are coerced to strings
-    return dict((smart_str(k), v) for k, v in obj.iteritems())
+    if type(obj) == dict:
+        return dict((smart_str(k), v) for k, v in obj.iteritems())
+    else:
+        return obj
 
 
 def ensure_valid_project_id(desired_project, data):
