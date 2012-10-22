@@ -86,7 +86,7 @@ def api_method(func):
 
 
 def _check_store_auth(request, project):
-    client = '<unknown client>'
+    client = None
     auth_vars = extract_auth_vars(request)
     data = request.raw_post_data
 
@@ -178,6 +178,7 @@ def store(request, project=None):
     logger.debug('Inbound %r request from %r (%s)', request.method, request.META['REMOTE_ADDR'],
         request.META.get('HTTP_USER_AGENT'))
     response = HttpResponse()
+    client = '<unknown client>'
 
     if request.method == 'POST':
         try:
@@ -203,6 +204,7 @@ def bulkstore(request, project=None):
     logger.debug('Inbound %r request from %r (%s)', request.method, request.META['REMOTE_ADDR'],
         request.META.get('HTTP_USER_AGENT'))
     response = HttpResponse()
+    client = '<unknown client>'
 
     if request.method == 'POST':
         try:
