@@ -181,7 +181,7 @@ def store(request, project=None):
 
     if request.method == 'POST':
         try:
-            project, data, client = _check_store_auth(request)
+            project, data, client = _check_store_auth(request, project)
             data = _extract_msg(project, data, client)
             insert_data_to_database(data)
         except APIError, error:
